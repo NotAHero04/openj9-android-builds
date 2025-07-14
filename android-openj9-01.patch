@@ -1,0 +1,109 @@
+diff --git a/get_source.sh b/get_source.sh
+index e8271466a..ccb43dfd8 100644
+--- a/get_source.sh
++++ b/get_source.sh
+@@ -234,7 +234,7 @@ clone_or_update_repos() {
+ 				echo "Cloning $folder version $branch from $url"
+ 				echo
+ 
+-				git clone \
++				git clone --depth 1 \
+ 					${reference:+--reference "$reference"} \
+ 					${source_options[$key]} \
+ 					-b "$branch" \
+diff --git a/make/autoconf/flags-cflags.m4 b/make/autoconf/flags-cflags.m4
+index c29bd898d..d589df298 100644
+--- a/make/autoconf/flags-cflags.m4
++++ b/make/autoconf/flags-cflags.m4
+@@ -40,7 +40,7 @@ AC_DEFUN([FLAGS_SETUP_SHARED_LIBS],
+     # --disable-new-dtags forces use of RPATH instead of RUNPATH for rpaths.
+     # This protects internal library dependencies within the JDK from being
+     # overridden using LD_LIBRARY_PATH. See JDK-8326891 for more information.
+-    SET_EXECUTABLE_ORIGIN='-Wl,-rpath,\$$ORIGIN[$]1 -Wl,--disable-new-dtags'
++    SET_EXECUTABLE_ORIGIN='-Wl,-rpath,\$$ORIGIN[$]1'
+     SET_SHARED_LIBRARY_ORIGIN="-Wl,-z,origin $SET_EXECUTABLE_ORIGIN"
+     SET_SHARED_LIBRARY_NAME='-Wl,-soname=[$]1'
+ 
+diff --git a/make/autoconf/libraries.m4 b/make/autoconf/libraries.m4
+index bf697928f..0ccaf0580 100644
+--- a/make/autoconf/libraries.m4
++++ b/make/autoconf/libraries.m4
+@@ -207,7 +207,7 @@ AC_DEFUN_ONCE([LIB_SETUP_MISC_LIBS],
+   else
+     ICONV_CFLAGS=
+     ICONV_LDFLAGS=
+-    ICONV_LIBS=
++    ICONV_LIBS=-liconv
+   fi
+   AC_SUBST(ICONV_CFLAGS)
+   AC_SUBST(ICONV_LDFLAGS)
+diff --git a/make/modules/java.desktop/lib/AwtLibraries.gmk b/make/modules/java.desktop/lib/AwtLibraries.gmk
+index 463e09e12..86e705464 100644
+--- a/make/modules/java.desktop/lib/AwtLibraries.gmk
++++ b/make/modules/java.desktop/lib/AwtLibraries.gmk
+@@ -298,7 +298,7 @@ ifeq ($(call isTargetOs, windows macosx)+$(ENABLE_HEADLESS_ONLY), false+false)
+       DISABLED_WARNINGS_clang_aix_awt_InputMethod.c := unused-function sign-compare, \
+       JDK_LIBS := libawt java.base:libjava, \
+       LIBS_unix := $(LIBDL) $(LIBM) $(X_LIBS) -lX11 -lXext -lXi -lXrender \
+-          -lXtst, \
++          -lXtst -landroid-shmem, \
+       LIBS_linux := $(LIBPTHREAD), \
+       STATIC_LIB_EXCLUDE_OBJS := $(LIBAWT_XAWT_STATIC_EXCLUDE_OBJS), \
+   ))
+diff --git a/src/java.base/unix/native/libjava/jni_util_md.c b/src/java.base/unix/native/libjava/jni_util_md.c
+index 7195b3def..a703181fc 100644
+--- a/src/java.base/unix/native/libjava/jni_util_md.c
++++ b/src/java.base/unix/native/libjava/jni_util_md.c
+@@ -31,12 +31,14 @@
+ #include "jni_util.h"
+ #include "dlfcn.h"
+ 
++/*
+ #if defined(LINUX) && (defined(_GNU_SOURCE) || \
+          (defined(_POSIX_C_SOURCE) && _POSIX_C_SOURCE < 200112L \
+              && defined(_XOPEN_SOURCE) && _XOPEN_SOURCE < 600))
+ extern int __xpg_strerror_r(int, char *, size_t);
+ #define strerror_r(a, b, c) __xpg_strerror_r((a), (b), (c))
+ #endif
++*/
+ 
+ void* getProcessHandle() {
+     static void *procHandle = NULL;
+@@ -64,5 +66,5 @@ JNIEXPORT int JNICALL
+ getErrorString(int err, char *buf, size_t len)
+ {
+     if (err == 0 || len < 1) return 0;
+-    return strerror_r(err, buf, len);
++    return strerror_r(err, buf, len) ? 0 : -1;
+ }
+diff --git a/src/java.base/unix/native/libnet/net_util_md.h b/src/java.base/unix/native/libnet/net_util_md.h
+index 902cf9673..bac7271bf 100644
+--- a/src/java.base/unix/native/libnet/net_util_md.h
++++ b/src/java.base/unix/native/libnet/net_util_md.h
+@@ -30,6 +30,9 @@
+ #include <poll.h>
+ #include <sys/socket.h>
+ 
++#include <linux/in.h>
++#include <linux/in6.h>
++
+ /************************************************************************
+  * Macros and constants
+  */
+diff --git a/src/jdk.jpackage/share/native/applauncher/JvmLauncher.cpp b/src/jdk.jpackage/share/native/applauncher/JvmLauncher.cpp
+index 83f45c2cd..f776673cc 100644
+--- a/src/jdk.jpackage/share/native/applauncher/JvmLauncher.cpp
++++ b/src/jdk.jpackage/share/native/applauncher/JvmLauncher.cpp
+@@ -34,6 +34,12 @@
+ #include "Toolbox.h"
+ #include "ErrorHandling.h"
+ 
++extern "C" void
++__cxa_call_terminate(void* ue_header_in) throw ()
++{
++  std::terminate();
++}
++
+ Jvm::Jvm() {
+     LOG_TRACE(tstrings::any() << "Jvm(" << this << ")::Jvm()");
+ }

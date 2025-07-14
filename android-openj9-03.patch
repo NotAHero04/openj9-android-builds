@@ -1,0 +1,245 @@
+diff --git a/cmake/modules/OmrDetectSystemInformation.cmake b/cmake/modules/OmrDetectSystemInformation.cmake
+index 7d574e82b..8bf56d728 100644
+--- a/cmake/modules/OmrDetectSystemInformation.cmake
++++ b/cmake/modules/OmrDetectSystemInformation.cmake
+@@ -160,6 +160,9 @@ macro(omr_detect_system_information)
+ 	if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+ 		set(OMR_HOST_OS "linux")
+ 		set(OMR_OS_LINUX TRUE)
++	elseif(CMAKE_SYSTEM_NAME MATCHES "Android")
++		set(OMR_HOST_OS "linux")
++		set(OMR_OS_LINUX TRUE)
+ 	elseif(CMAKE_SYSTEM_NAME MATCHES "Darwin")
+ 		set(OMR_HOST_OS "osx")
+ 		set(OMR_OS_OSX TRUE)
+diff --git a/compiler/aarch64/runtime/arm64asmdefs.inc b/compiler/aarch64/runtime/arm64asmdefs.inc
+index cd83e3dcd..41c8b8e23 100644
+--- a/compiler/aarch64/runtime/arm64asmdefs.inc
++++ b/compiler/aarch64/runtime/arm64asmdefs.inc
+@@ -20,9 +20,12 @@
+  *******************************************************************************/
+ 
+ #if defined(LINUX)
+-#define FUNC_LABEL(x)	x
+-#define LOAD_FUNC_PTR(reg, label) \
+-	ldr	reg, label
++#define FUNC_LABEL(x)   x
++	.macro  LOAD_FUNC_PTR_MACRO reg, label
++	adrp    \reg, \label
++	add     \reg, \reg, #:lo12:\label
++	.endm
++#define LOAD_FUNC_PTR(reg, label)       LOAD_FUNC_PTR_MACRO reg, label
+ #elif defined(OSX)
+ #define FUNC_LABEL(x)	_ ## x
+ 	.macro	LOAD_FUNC_PTR_MACRO	reg, label
+diff --git a/compiler/codegen/ELFGenerator.hpp b/compiler/codegen/ELFGenerator.hpp
+index 4dab57b1d..23e6b09c9 100644
+--- a/compiler/codegen/ELFGenerator.hpp
++++ b/compiler/codegen/ELFGenerator.hpp
+@@ -80,8 +80,8 @@ protected:
+     typedef Elf64_Sym  ELFSymbol;
+     typedef Elf64_Rela ELFRela;
+     typedef Elf64_Off  ELFOffset;
+-#define ELF_ST_INFO(bind, type) ELF64_ST_INFO(bind, type)
+-#define ELF_ST_VISIBILITY(visibility) ELF64_ST_VISIBILITY(visibility)
++// #define ELF_ST_INFO(bind, type) ELF64_ST_INFO(bind, type)
++#define ELF_ST_VISIBILITY(visibility) (visibility)
+ #define ELF_R_INFO(bind, type) ELF64_R_INFO(bind, type)
+ #define ELFClass ELFCLASS64;
+ #else
+diff --git a/ddr/lib/ddr-ir/CMakeLists.txt b/ddr/lib/ddr-ir/CMakeLists.txt
+index 5843ac27d..bc12b762e 100644
+--- a/ddr/lib/ddr-ir/CMakeLists.txt
++++ b/ddr/lib/ddr-ir/CMakeLists.txt
+@@ -46,3 +46,7 @@ target_link_libraries(omr_ddr_ir
+ target_compile_definitions(omr_ddr_ir
+ 	PRIVATE __STDC_LIMIT_MACROS
+ )
++
++target_compile_options(omr_ddr_ir PRIVATE
++    $<$<COMPILE_LANGUAGE:CXX>:-Wno-maybe-uninitialized>
++)
+diff --git a/ddr/lib/ddr-macros/CMakeLists.txt b/ddr/lib/ddr-macros/CMakeLists.txt
+index e2b0201d6..cf240c5bd 100644
+--- a/ddr/lib/ddr-macros/CMakeLists.txt
++++ b/ddr/lib/ddr-macros/CMakeLists.txt
+@@ -30,3 +30,7 @@ target_link_libraries(omr_ddr_macros
+ 	omr_ddr_base
+ 	omr_ddr_ir
+ )
++
++target_compile_options(omr_ddr_macros PRIVATE
++    $<$<COMPILE_LANGUAGE:CXX>:-Wno-maybe-uninitialized>
++)
+diff --git a/ddr/tools/blob_reader/CMakeLists.txt b/ddr/tools/blob_reader/CMakeLists.txt
+index f850e3c9d..ef7c8a3c1 100644
+--- a/ddr/tools/blob_reader/CMakeLists.txt
++++ b/ddr/tools/blob_reader/CMakeLists.txt
+@@ -49,3 +49,7 @@ if((OMR_TOOLCONFIG STREQUAL "gnu") AND (NOT OMR_OS_OSX))
+ 			APPEND_STRING PROPERTY LINK_FLAGS " -static-libstdc++")
+ 	endif()
+ endif()
++
++if(CMAKE_SYSTEM_NAME MATCHES "Android")
++    target_link_libraries(omr_blob_reader android-shmem android-sysv-semaphore iconv)
++endif()
+diff --git a/ddr/tools/ddrgen/CMakeLists.txt b/ddr/tools/ddrgen/CMakeLists.txt
+index 04728274e..f9789a40a 100644
+--- a/ddr/tools/ddrgen/CMakeLists.txt
++++ b/ddr/tools/ddrgen/CMakeLists.txt
+@@ -61,3 +61,7 @@ if((OMR_TOOLCONFIG STREQUAL "gnu") AND (NOT OMR_OS_OSX))
+ 			APPEND_STRING PROPERTY LINK_FLAGS " -static-libstdc++")
+ 	endif()
+ endif()
++
++if(CMAKE_SYSTEM_NAME MATCHES "Android")
++    target_link_libraries(omr_ddrgen android-shmem android-sysv-semaphore iconv)
++endif()
+diff --git a/fvtest/porttest/testProcessHelpers.cpp b/fvtest/porttest/testProcessHelpers.cpp
+index 58fc1eb3d..ae82dcc55 100644
+--- a/fvtest/porttest/testProcessHelpers.cpp
++++ b/fvtest/porttest/testProcessHelpers.cpp
+@@ -58,18 +58,6 @@
+ 
+ #if defined(LINUX) || defined(J9ZOS390) || defined(AIXPPC) || defined(OSX)
+ 
+-#if (defined(__GNU_LIBRARY__) && !defined(_SEM_SEMUN_UNDEFINED)) || defined(OSX)
+-/* union semun is defined by including <sys/sem.h> */
+-#else
+-/* according to X/OPEN we have to define it ourselves */
+-union semun {
+-	int val;                    /* value for SETVAL */
+-	struct semid_ds *buf;       /* buffer for IPC_STAT, IPC_SET */
+-	unsigned short int *array;  /* array for GETALL, SETALL */
+-	struct seminfo *__buf;      /* buffer for IPC_INFO */
+-};
+-#endif
+-
+ #if !defined(OMR_OS_WINDOWS)
+ static int setFdCloexec(int fd);
+ #if !defined(OSX)
+diff --git a/port/unix/auxv.c b/port/unix/auxv.c
+index 59b360691..49e0298b2 100644
+--- a/port/unix/auxv.c
++++ b/port/unix/auxv.c
+@@ -34,7 +34,7 @@
+ #include <pthread.h>
+ #include <auxv.h>
+ #include <errno.h>
+-#define __set_errno(the_errno)	*__errno_location() = the_errno
++#define __set_errno(the_errno)	errno = the_errno
+ 
+ static char **saved_environ = NULL;
+ 
+diff --git a/port/unix/omrintrospect.c b/port/unix/omrintrospect.c
+index 70b1be073..b2550d996 100644
+--- a/port/unix/omrintrospect.c
++++ b/port/unix/omrintrospect.c
+@@ -1430,9 +1430,6 @@ setup_native_thread(J9ThreadWalkState *state, thread_context *sigContext, int he
+ 		if (NULL != sigContext) {
+ 			/* we're using the provided context instead of generating it */
+ 			memcpy(state->current_thread->context, ((OMRUnixSignalInfo *)sigContext)->platformSignalInfo.context, size);
+-		} else if (state->current_thread->thread_id == omrthread_get_ras_tid()) {
+-			/* return context for current thread */
+-			getcontext((ucontext_t *)state->current_thread->context);
+ 		} else {
+ 			memcpy(state->current_thread->context, (void *)data->thread->context, size);
+ 		}
+diff --git a/port/unix/omrshmem.c b/port/unix/omrshmem.c
+index d28b9f939..17eef52ad 100644
+--- a/port/unix/omrshmem.c
++++ b/port/unix/omrshmem.c
+@@ -1672,7 +1672,7 @@ omrshmem_openSharedMemory (OMRPortLibrary *portLibrary, intptr_t fd, const char
+ 			if (buf.shm_perm.key != controlinfo->common.ftok_key)
+ #elif defined(__GNUC__)
+ 			/*Use .__key for __GNUC__*/
+-			if (buf.shm_perm.__key != controlinfo->common.ftok_key)
++			if (buf.shm_perm.key != controlinfo->common.ftok_key)
+ #endif
+ 			{
+ 				Trc_PRT_shmem_omrshmem_openSharedMemory_Msg("The <key,id> pair in our control file is no longer valid.");
+diff --git a/port/unix/omrshsem_deprecated.c b/port/unix/omrshsem_deprecated.c
+index 0e64fa369..b7afc999e 100644
+--- a/port/unix/omrshsem_deprecated.c
++++ b/port/unix/omrshsem_deprecated.c
+@@ -1072,7 +1072,7 @@ omrshsem_openSemaphore(struct OMRPortLibrary *portLibrary, intptr_t fd, char *ba
+ 			if (buf.key != controlinfo->ftok_key)
+ #elif defined(__GNUC__)
+ 			/*Use .__key for __GNUC__*/
+-			if (buf.sem_perm.__key != controlinfo->ftok_key)
++			if (buf.sem_perm.key != controlinfo->ftok_key)
+ #endif
+ 			{
+ 				Trc_PRT_shsem_omrshsem_opensemaphore_Msg("The <key,id> pair in our control file is no longer valid.");
+diff --git a/port/unix/omrshsemun.h b/port/unix/omrshsemun.h
+index e79ba1209..10e3bef6a 100644
+--- a/port/unix/omrshsemun.h
++++ b/port/unix/omrshsemun.h
+@@ -24,18 +24,4 @@
+ 
+ #include <sys/types.h>
+ 
+-#if defined(__GNU_LIBRARY__) && !defined(_SEM_SEMUN_UNDEFINED)
+-/* union semun is defined by including <sys/sem.h> */
+-#else
+-#if !defined(OSX)
+-/* according to X/OPEN we have to define it ourselves */
+-union semun {
+-	int val;                    /* value for SETVAL */
+-	struct semid_ds* buf;       /* buffer for IPC_STAT, IPC_SET */
+-	unsigned short int* array;  /* array for GETALL, SETALL */
+-	struct seminfo* __buf;      /* buffer for IPC_INFO */
+-};
+-#endif /* OSX */
+-#endif
+-
+ #endif     /* omrshsemun_h */
+diff --git a/thread/common/omrthreadinspect.c b/thread/common/omrthreadinspect.c
+index ba8d0b1f9..087971066 100644
+--- a/thread/common/omrthreadinspect.c
++++ b/thread/common/omrthreadinspect.c
+@@ -317,22 +317,10 @@ omrthread_get_stack_range(omrthread_t thread, void **stackStart, void **stackEnd
+ 	}
+ 
+ 	/* Retrieve base stack address and stack size from pthread_attr_t */
+-#if (_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600)
+ 	if ((rc = pthread_attr_getstack(&attr, stackStart, &stackSize)) != 0) {
+ 		thread->os_errno = rc;
+ 		return (J9THREAD_ERR_GETSTACK | J9THREAD_ERR_OS_ERRNO_SET);
+ 	}
+-#else /* (_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600) */
+-	if ((rc = pthread_attr_getstackaddr(&attr, stackStart)) != 0) {
+-		thread->os_errno = rc;
+-		return (J9THREAD_ERR_GETSTACK | J9THREAD_ERR_OS_ERRNO_SET);
+-	}
+-
+-	if ((rc = pthread_attr_getstacksize(&attr, &stackSize)) != 0) {
+-		thread->os_errno = rc;
+-		return (J9THREAD_ERR_GETSTACK | J9THREAD_ERR_OS_ERRNO_SET);
+-	}
+-#endif /* (_POSIX_C_SOURCE >= 200112L || _XOPEN_SOURCE >= 600) */
+ 	pthread_attr_destroy(&attr);
+ 
+ #if defined(AIXPPC)
+diff --git a/thread/unix/rasthrsup.c b/thread/unix/rasthrsup.c
+index bad874e34..ca464b4a4 100644
+--- a/thread/unix/rasthrsup.c
++++ b/thread/unix/rasthrsup.c
+@@ -23,6 +23,8 @@
+ #include <pthread.h>
+ #include <unistd.h>
+ 
++#define __GLIBC_PREREQ(a, b) 0
++
+ /* this #include defines the buildspec flags */
+ #include "omrthread.h"
+ 
+@@ -50,8 +52,6 @@
+ #include <sys/types.h>
+ #include <linux/unistd.h>
+ 
+-/* this line is needed to build the syscall macro which is called (as gettid) within the function */
+-_syscall0(pid_t, gettid);
+ #endif /* !__GLIBC_PREREQ(2,4) && !defined(OMRZTPF) */
+ #endif /* defined(LINUX) */
+ 
